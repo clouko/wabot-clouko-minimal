@@ -1,0 +1,2 @@
+# wabot-clouko-minimal
+bot
