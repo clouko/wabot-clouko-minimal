@@ -1,6 +1,5 @@
-import express from "express";
-import fetch from "node-fetch";
-import { Twilio } from "twilio";
+const express = require("express");
+const { Twilio } = require("twilio");
 
 const app = express();
 app.use(express.urlencoded({ extended: false }));
@@ -12,19 +11,14 @@ const {
   TWILIO_WHATSAPP_NUMBER,
   OPENAI_API_KEY,
   SHEET_CSV_URL,
-  WIX_BOOKING_URL,
-  PORT
+  WIX_BOOKING_URL
 } = process.env;
 
 if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN || !TWILIO_WHATSAPP_NUMBER) {
   console.warn("⚠️ Falta configurar credenciales de Twilio.");
 }
-if (!SHEET_CSV_URL) {
-  console.warn("⚠️ Falta SHEET_CSV_URL (CSV publicado de Google Sheets).");
-}
-if (!WIX_BOOKING_URL) {
-  console.warn("⚠️ Falta WIX_BOOKING_URL (link a tu página de reservas en Wix).");
-}
+if (!SHEET_CSV_URL) console.warn("⚠️ Falta SHEET_CSV_URL (CSV de Google Sheets).");
+if (!WIX_BOOKING_URL) console.warn("⚠️ Falta WIX_BOOKING_URL (reservas Wix).");
 
 const twilio = new Twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
 
@@ -37,8 +31,6 @@ async function loadCatalog() {
   const res = await fetch(SHEET_CSV_URL);
   if (!res.ok) throw new Error("No se pudo leer el CSV del catálogo");
   const text = await res.text();
-
-  // Parseo CSV muy básico (sin comillas escapadas)
   const lines = text.trim().split(/\r?\n/);
   if (lines.length < 2) return [];
   const headers = lines[0].split(",").map(s => s.trim());
@@ -53,8 +45,7 @@ async function loadCatalog() {
 }
 
 function normalize(str) {
-  return (str || "").toLowerCase()
-    .normalize("NFD").replace(/\p{Diacritic}/gu, "");
+  return (str || "").toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "");
 }
 
 function searchServices(catalog, query) {
@@ -78,15 +69,18 @@ function searchServices(catalog, query) {
 }
 
 async function askAI(catalog, userText) {
-  // Llamada simple a OpenAI (Chat Completions)
+  if (!OPENAI_API_KEY) {
+    return "No encontré ese servicio en el catálogo 🙈. Prueba con una palabra clave (ej: 'manicure', 'balayage', 'alisado') o reserva aquí: " + WIX_BOOKING_URL;
+  }
   const body = {
     model: "gpt-4o-mini",
     messages: [
       {
         role: "system",
-        content: `Eres el asistente de ClouKo. Responde breve, cálido y concreto.
+        content:
+`Eres el asistente de ClouKo. Responde breve, cálido y concreto.
 Usa EXCLUSIVAMENTE este catálogo para precios/duración:
-${JSON.stringify(catalog).slice(0, 12000)} 
+${JSON.stringify(catalog).slice(0, 12000)}
 Si no hay match exacto, sugiere 2–3 alternativas del catálogo.
 Nunca inventes precios. Termina con un CTA: "¿Te reservo?" y el link ${WIX_BOOKING_URL}.`
       },
@@ -95,21 +89,17 @@ Nunca inventes precios. Termina con un CTA: "¿Te reservo?" y el link ${WIX_BOOK
   };
   const r = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${OPENAI_API_KEY}` },
+    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${OPENAI_API_KEY}` },
     body: JSON.stringify(body)
   });
-  if (!r.ok) {
-    const t = await r.text();
-    console.error("OpenAI error:", t);
-    return "Estoy con intermitencia. ¿Podrías repetir más simple, por favor?";
-  }
+  if (!r.ok) return "Estoy con intermitencia. ¿Podrías repetir más simple, por favor?";
   const j = await r.json();
   return j.choices?.[0]?.message?.content?.trim() || "¿Podrías repetir, por favor?";
 }
 
 app.post("/whatsapp", async (req, res) => {
   try {
-    const from = req.body.From; // "whatsapp:+56..."
+    const from = req.body.From;
     const text = (req.body.Body || "").trim();
     const catalog = await loadCatalog();
 
@@ -133,11 +123,7 @@ Te responderé con precio y duración. ¿Te reservo? ${WIX_BOOKING_URL}`;
       }
     }
 
-    await twilio.messages.create({
-      from: TWILIO_WHATSAPP_NUMBER,
-      to: from,
-      body: reply
-    });
+    await twilio.messages.create({ from: TWILIO_WHATSAPP_NUMBER, to: from, body: reply });
     res.sendStatus(200);
   } catch (e) {
     console.error("Webhook error:", e);
@@ -146,5 +132,5 @@ Te responderé con precio y duración. ¿Te reservo? ${WIX_BOOKING_URL}`;
 });
 
 app.get("/", (_, res) => res.send("OK"));
-const port = PORT || 3000;
+const port = process.env.PORT || 3000;
 app.listen(port, () => console.log("Servidor iniciado en puerto", port));
